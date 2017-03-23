@@ -6,22 +6,32 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Deque;
 import java.util.ArrayDeque;
+import java.util.stream.Collectors;
 
 public class MikaStandardAI {
+    static int stayCount;
+    static boolean bombDropped;
+    static String lastMove;
+
     public static void main(String[] args) {
         try {
             Deque<String> arguments = new ArrayDeque<String>();
             Scanner scanner = new Scanner(System.in);
-            String input = scanner.nextLine();
+            stayCount = 0;
+            bombDropped = false;
 
-            while (!input.equals("END")) {
-                arguments.addLast(input);
-                input = scanner.nextLine();
+            while (true) {
+                String input = scanner.nextLine();
+
+                while (!input.equals("END")) {
+                    arguments.addLast(input);
+                    input = scanner.nextLine();
+                }
+
+                State state = new MikaStandardAI().new State(arguments);
             }
-
-            State state = new MikaStandardAI().new State(arguments);
-            state.makeAction();
         } catch (Exception e) {
+            System.out.println(Arrays.toString(e.getStackTrace()));
             printRandomAction();
         }
     }
@@ -32,18 +42,23 @@ public class MikaStandardAI {
 
         switch (random.nextInt(6)) {
             case 0:
+                lastMove = ">> MOVE RIGHT";
                 System.out.println(">> MOVE RIGHT");
                 break;
             case 1:
+                lastMove = ">> MOVE LEFT";
                 System.out.println(">> MOVE LEFT");
                 break;
             case 2:
+                lastMove = ">> MOVE UP";
                 System.out.println(">> MOVE UP");
                 break;
             case 3:
+                lastMove = ">> MOVE DOWN";
                 System.out.println(">> MOVE DOWN");
                 break;
             case 4:
+                lastMove = ">> DROP BOMB";
                 System.out.println(">> DROP BOMB");
                 break;
             default:
@@ -52,29 +67,17 @@ public class MikaStandardAI {
         }
     }
 
-    private static String checkForBomb() {
-        // decide best directions.
-        return null;
-    }
-
-    private static String searchForPowerup() {
-        return null;
-    }
-
-    private static String huntForEnemy() {
-        // todo: if enemy is within bomb range, drop bomb then lari
-        // kill yg poinnya gede duls
-        return null;
-    }
-
-    class State {
+    private class State {
         private int turn;
         private int playerCount;
         private List<Player> playerList;
         private Board board;
+        private int row;
+        private int column;
+        private boolean[][] traversalFlag;
 
         public State(Deque<String> arguments) {
-            playerList = new ArrayList<Player>();
+            playerList = new ArrayList<>();
 
             // Turn
             String input = arguments.poll();
@@ -111,7 +114,10 @@ public class MikaStandardAI {
             input = arguments.poll();
             String[] boardSize = input.split(" ");
 
-            board = new Board(arguments, Integer.parseInt(boardSize[1]), Integer.parseInt(boardSize[2]));
+            row = Integer.parseInt(boardSize[1]);
+            column = Integer.parseInt(boardSize[2]);
+            board = new Board(arguments, row, column);
+            traversalFlag = new boolean[row][column];
 
             String[] playerLocation = board.getPlayerLocation(playerCount);
 
@@ -122,6 +128,46 @@ public class MikaStandardAI {
                 Player player = this.playerList.get(i);
                 player.setX(x);
                 player.setY(y);
+            }
+
+            scanDangerZones();
+            makeAction();
+        }
+
+        void scanDangerZones() {
+            // Clear it first
+            board.clearDangerZones();
+            List<BoardObject> bombs = getAllBombs();
+
+            for (BoardObject bombObject : bombs) {
+                Bomb bomb = (Bomb) bombObject;
+                int x = bomb.getX();
+                int y = bomb.getY();
+
+                BoardObject here = new BoardObject("DANGER_ZONE", x, y, true, "DANGER_ZONE_ANYWHERE_IS_FINE");
+                board.putObject(x, y, here);
+
+                for (int i = 1; i <= bomb.getPower(); i++) {
+                    if (!isOutOfBounds(x - i, y)) {
+                        BoardObject up = new BoardObject("DANGER_ZONE", x - i, y, true, "DANGER_ZONE_UP");
+                        board.putObject(x - i, y, up);
+                    }
+
+                    if (!isOutOfBounds(x + i, y)) {
+                        BoardObject down = new BoardObject("DANGER_ZONE", x + i, y, true, "DANGER_ZONE_DOWN");
+                        board.putObject(x + i, y, down);
+                    }
+
+                    if (!isOutOfBounds(x, y - i)) {
+                        BoardObject left = new BoardObject("DANGER_ZONE", x, y - i, true, "DANGER_ZONE_LEFT");
+                        board.putObject(x, y - i, left);
+                    }
+
+                    if (!isOutOfBounds(x, y + i)) {
+                        BoardObject right = new BoardObject("DANGER_ZONE", x, y + i, true, "DANGER_ZONE_RIGHT");
+                        board.putObject(x, y + i, right);
+                    }
+                }
             }
         }
 
@@ -135,86 +181,382 @@ public class MikaStandardAI {
             return -1;
         }
 
-        public boolean[][] getPassableNodes() {
+        boolean[][] getPassableNodes() {
             return this.board.getPassableNodes();
         }
 
-        public String 
+        boolean isOutOfBounds(int x, int y) {
+            boolean xOutOfBound = x < 0 || x + 1 > row;
+            boolean yOutOfBound = y < 0 || y + 1 > column;
+            return xOutOfBound || yOutOfBound;
+        }
 
-        public List<BoardObject> getAllObjects(int x, int y) {
+        String getRandomDirection() {
+            Random random = new Random();
+
+            switch (random.nextInt(4)) {
+                case 0:
+                    return ">> MOVE RIGHT";
+                case 1:
+                    return ">> MOVE LEFT";
+                case 2:
+                    return ">> MOVE UP";
+                default:
+                    return ">> MOVE DOWN";
+            }
+        }
+
+        boolean isValidAndSafe(int x, int y) {
+            if (isOutOfBounds(x, y))
+                return false;
+
+            return getPassableNodes()[x][y];
+        }
+
+        boolean isNearbyDestructibleWall() {
+            Player player = getMyPlayer();
+            List<BoardObject> destructibleWalls = new ArrayList<>();
+            int x = player.getX();
+            int y = player.getY();
+
+            if (!isOutOfBounds(x - 1, y)) {
+                destructibleWalls.addAll(board.getObjectsOfType(x - 1, y, "DESTRUCTIBLE_WALL"));
+                destructibleWalls.addAll(board.getObjectsOfType(x - 1, y, "DESTRUCTIBLE_WALL_WITH_POWERUP"));
+            }
+
+            if (!isOutOfBounds(x + 1, y)) {
+                destructibleWalls.addAll(board.getObjectsOfType(x + 1, y, "DESTRUCTIBLE_WALL"));
+                destructibleWalls.addAll(board.getObjectsOfType(x + 1, y, "DESTRUCTIBLE_WALL_WITH_POWERUP"));
+            }
+
+            if (!isOutOfBounds(x, y - 1)) {
+                destructibleWalls.addAll(board.getObjectsOfType(x, y - 1, "DESTRUCTIBLE_WALL"));
+                destructibleWalls.addAll(board.getObjectsOfType(x, y - 1, "DESTRUCTIBLE_WALL_WITH_POWERUP"));
+            }
+
+            if (!isOutOfBounds(x, y + 1)) {
+                destructibleWalls.addAll(board.getObjectsOfType(x, y + 1, "DESTRUCTIBLE_WALL"));
+                destructibleWalls.addAll(board.getObjectsOfType(x, y + 1, "DESTRUCTIBLE_WALL_WITH_POWERUP"));
+            }
+
+            return !destructibleWalls.isEmpty();
+        }
+
+        boolean isNearbyEnemy() {
+            Player player = getMyPlayer();
+            List<BoardObject> potentialEnemies = new ArrayList<>();
+            int x = player.getX();
+            int y = player.getY();
+
+            for (int i = 1; i <= player.getBombRange(); i++) {
+                if (!isOutOfBounds(x - i, y))
+                    potentialEnemies.addAll(board.getObjectsOfType(x - i, y, "PLAYER"));
+                if (!isOutOfBounds(x + i, y))
+                    potentialEnemies.addAll(board.getObjectsOfType(x + i, y, "PLAYER"));
+                if (!isOutOfBounds(x, y - i))
+                    potentialEnemies.addAll(board.getObjectsOfType(x, y - i, "PLAYER"));
+                if (!isOutOfBounds(x, y + 1))
+                    potentialEnemies.addAll(board.getObjectsOfType(x, y + 1, "PLAYER"));
+            }
+
+            return !potentialEnemies.isEmpty();
+        }
+
+        List<String> getAvailableMoves(int x, int y) {
+            List<String> availableMoves = new ArrayList<String>();
+
+            if (isValidAndSafe(x - 1, y))
+                availableMoves.add(">> MOVE UP");
+
+            if (isValidAndSafe(x + 1, y))
+                availableMoves.add(">> MOVE DOWN");
+
+            if (isValidAndSafe(x, y - 1))
+                availableMoves.add(">> MOVE LEFT");
+
+            if (isValidAndSafe(x, y + 1))
+                availableMoves.add(">> MOVE RIGHT");
+
+            return availableMoves;
+        }
+
+        List<BoardObject> getAllObjects(int x, int y) {
             return board.getAllObjects(x, y);
         }
 
-        public List<BoardObject> getAllBombs() {
+        List<BoardObject> getAllBombs() {
             return board.getAllBombs();
         }
 
-        public List<BoardObject> getAllFlares() {
+        List<BoardObject> getAllFlares() {
             return board.getAllFlares();
         }
 
-        public List<BoardObject> getAllDestructibleWalls() {
+        List<BoardObject> getAllDestructibleWalls() {
             return board.getAllDestructibleWalls();
         }
 
-        public List<BoardObject> getAllPowerups() {
+        List<BoardObject> getAllPowerups() {
             return board.getAllPowerups();
         }
 
-        public List<BoardObject> getAllObjectsExceptIndestructibleWalls() {
+        List<BoardObject> getAllObjectsExceptIndestructibleWalls() {
             return board.getAllObjectsExceptIndestructibleWalls();
         }
 
-        public void makeAction() {
-            String nextMove= null;
+        Player getMyPlayer() {
+            for (Player player : playerList) {
+                if (player.getName().equals("MikaStandardAI"))
+                    return player;
+            }
 
-            nextMove = checkForBomb();
+            return null;
+        }
+
+        public void makeAction() {
+            if (bombDropped) {
+                // Running to previous position
+                if (lastMove.equals(">> MOVE UP"))
+                    printMovement(">> MOVE DOWN");
+                else if (lastMove.equals(">> MOVE DOWN"))
+                    printMovement(">> MOVE UP");
+                else if (lastMove.equals(">> MOVE LEFT"))
+                    printMovement(">> MOVE RIGHT");
+                else if (lastMove.equals(">> MOVE RIGHT"))
+                    printMovement(">> MOVE LEFT");
+
+                bombDropped = false;
+            }
+
+            if (stayCount > 10) {
+                printMovement(getRandomDirection());
+                stayCount = 0;
+            }
+
+            String nextMove;
+            Player myPlayer = getMyPlayer();
+            nextMove = checkForBomb(myPlayer.getX(), myPlayer.getY());
 
             if (nextMove != null) {
-                System.out.println(nextMove);
+                printMovement(nextMove);
                 return;
             }
 
             nextMove = searchForPowerup();
 
             if (nextMove != null) {
-                System.out.println(nextMove);
+                printMovement(nextMove);
                 return;
             }
 
             nextMove = huntForEnemy();
-            System.out.println(nextMove);
+
+            if (nextMove != null) {
+                printMovement(nextMove);
+                return;
+            }
+
+            stayCount++;
+            System.out.println(">> STAY");
         }
 
-        public int getTurn() {
+        // Return null if safe, String of best direction otherwise
+        String checkForBomb(int x, int y) {
+            boolean upIsSafe = isValidAndSafe(x - 1, y);
+            boolean downIsSafe = isValidAndSafe(x + 1, y);
+            boolean leftIsSafe = isValidAndSafe(x, y - 1);
+            boolean rightIsSafe = isValidAndSafe(x, y + 1);
+
+            if (!board.getObjectsOfType(x, y, "BOMB").isEmpty()) {
+                // Running anywhere is fine
+                if (upIsSafe)
+                    return ">> MOVE UP";
+                if (downIsSafe)
+                    return ">> MOVE DOWN";
+                if (leftIsSafe)
+                    return ">> MOVE LEFT";
+                if (rightIsSafe)
+                    return ">> MOVE RIGHT";
+            }
+
+            List<BoardObject> dangers = board.getObjectsOfType(x, y, "DANGER_ZONE");
+
+            if (dangers.isEmpty())
+                return null;
+
+            for (BoardObject danger : dangers) {
+                if (danger.getName().equals("DANGER_ZONE_UP"))
+                    downIsSafe = false;
+                if (danger.getName().equals("DANGER_ZONE_DOWN"))
+                    upIsSafe = false;
+                if (danger.getName().equals("DANGER_ZONE_LEFT"))
+                    rightIsSafe = false;
+                if (danger.getName().equals("DANGER_ZONE_RIGHT"))
+                    leftIsSafe = false;
+            }
+
+            if (upIsSafe)
+                return ">> MOVE UP";
+            if (downIsSafe)
+                return ">> MOVE DOWN";
+            if (leftIsSafe)
+                return ">> MOVE LEFT";
+            if (rightIsSafe)
+                return ">> MOVE RIGHT";
+
+            return getRandomDirection();
+        }
+
+        String searchForPowerup() {
+            Player player = getMyPlayer();
+            int x = player.getX();
+            int y = player.getY();
+
+            clearTraversalFlag();
+
+            if (searchForPowerupRecursively(x - 1, y))
+                return ">> MOVE UP";
+            if (searchForPowerupRecursively(x + 1, y))
+                return ">> MOVE DOWN";
+            if (searchForPowerupRecursively(x, y - 1))
+                return ">> MOVE LEFT";
+            if (searchForPowerupRecursively(x, y + 1))
+                return ">> MOVE RIGHT";
+
+            return null;
+        }
+
+        boolean searchForPowerupRecursively(int x, int y) {
+            if (isOutOfBounds(x, y))
+                return false;
+
+            traversalFlag[x][y] = true;
+
+            if (!board.getObjectsOfType(x, y, "POWERUP").isEmpty())
+                return true;
+
+            boolean found = false;
+
+            if (!isOutOfBounds(x - 1, y) && !traversalFlag[x - 1][y]) {
+                found = found || searchForPowerupRecursively(x - 1, y);
+            }
+
+            if (!isOutOfBounds(x + 1, y) && !traversalFlag[x + 1][y]) {
+                found = found || searchForPowerupRecursively(x + 1, y);
+            }
+
+            if (!isOutOfBounds(x, y - 1) && !traversalFlag[x][y - 1]) {
+                found = found || searchForPowerupRecursively(x, y - 1);
+            }
+
+            if (!isOutOfBounds(x, y + 1) && !traversalFlag[x][y + 1]) {
+                found = found || searchForPowerupRecursively(x, y + 1);
+            }
+
+            return found;
+        }
+
+        void clearTraversalFlag() {
+            for (int i = 0; i < row; i++) {
+                for (int j = 0; j < column; j++) {
+                    traversalFlag[i][j] = false;
+                }
+            }
+        }
+
+        String huntForEnemy() {
+            Player myPlayer = getMyPlayer();
+            int x = myPlayer.getX();
+            int y = myPlayer.getY();
+
+            if (isNearbyDestructibleWall() && canDropBomb()) {
+                bombDropped = true;
+                return ">> DROP BOMB";
+            }
+
+            if (isNearbyEnemy() && canDropBomb()) {
+                bombDropped = true;
+                return ">> DROP BOMB";
+            }
+
+            Player nearestEnemy = findNearestEnemy();
+            if (nearestEnemy != null) {
+                if (nearestEnemy.getX() < x && isValidAndSafe(x - 1, y))
+                    return ">> MOVE UP";
+                if (nearestEnemy.getX() > x && isValidAndSafe(x + 1, y))
+                    return ">> MOVE DOWN";
+                if (nearestEnemy.getX() < x && isValidAndSafe(x, y - 1))
+                    return ">> MOVE LEFT";
+                if (nearestEnemy.getX() < x && isValidAndSafe(x, y + 1))
+                    return ">> MOVE RIGHT";
+            }
+
+            return null;
+        }
+
+        Player findNearestEnemy() {
+            if (playerList.isEmpty())
+                return null;
+
+            Player nearestEnemy = playerList.get(0);
+            Player myPlayer = getMyPlayer();
+
+            for (int i = 1; i < playerList.size(); i++) {
+                Player newPlayer = playerList.get(i);
+                int currentDistance = manhattanDistance(myPlayer.getX(), myPlayer.getY(), nearestEnemy.getX(), nearestEnemy.getY());
+                int newDistance = manhattanDistance(myPlayer.getX(), myPlayer.getY(), newPlayer.getX(), newPlayer.getY());
+
+                if (newDistance < currentDistance)
+                    nearestEnemy = newPlayer;
+            }
+
+            return nearestEnemy;
+        }
+
+        int manhattanDistance(int x1, int y1, int x2, int y2) {
+            return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+        }
+
+        void printMovement(String movement) {
+            lastMove = movement;
+            System.out.println(movement);
+        }
+
+        boolean canDropBomb() {
+            Player player = getMyPlayer();
+
+            return player.getBombCount() > 0;
+        }
+
+        int getTurn() {
             return turn;
         }
 
-        public void setTurn(int turn) {
+        void setTurn(int turn) {
             this.turn = turn;
         }
 
-        public int getPlayerCount() {
+        int getPlayerCount() {
             return playerCount;
         }
 
-        public void setPlayerCount(int playerCount) {
+        void setPlayerCount(int playerCount) {
             this.playerCount = playerCount;
         }
 
-        public List<Player> getPlayerList() {
+        List<Player> getPlayerList() {
             return playerList;
         }
 
-        public void setPlayerList(List<Player> playerList) {
+        void setPlayerList(List<Player> playerList) {
             this.playerList = playerList;
         }
 
-        public Board getBoard() {
+        Board getBoard() {
             return board;
         }
 
-        public void setBoard(Board board) {
+        void setBoard(Board board) {
             this.board = board;
         }
     }
@@ -302,6 +644,18 @@ public class MikaStandardAI {
             return searchedObjects;
         }
 
+        List<BoardObject> getObjectsOfType(int x, int y, String type) {
+            List<BoardObject> searchedObjects = new ArrayList<BoardObject>();
+            List<BoardObject> objects = getAllObjects(x, y);
+
+            for (BoardObject object : objects) {
+                if (object.getType().equals(type))
+                    searchedObjects.add(object);
+            }
+
+            return searchedObjects;
+        }
+
         List<BoardObject> getAllBombs() {
             return getObjectsOfType("BOMB");
         }
@@ -323,13 +677,25 @@ public class MikaStandardAI {
         List<BoardObject> getAllObjectsExceptIndestructibleWalls() {
             return null;
         }
+
+        void putObject(int x, int y, BoardObject object) {
+            nodes[x][y].getObjectList().add(object);
+        }
+
+        void clearDangerZones() {
+            for (int i = 0; i < row; i++) {
+                for (int j = 0; j < column; j++) {
+                    nodes[i][j].setObjectList(nodes[i][j].getObjectList().stream().filter(o -> !o.getType().equals("DANGER_ZONE")).collect(Collectors.toList()));
+                }
+            }
+        }
     }
 
     class BoardNode {
         List<BoardObject> objectList;
 
         public BoardNode(String nodeString, int x, int y) {
-            this.objectList = new ArrayList<BoardObject>();
+            objectList = new ArrayList<>();
             nodeString = nodeString.trim();
             String[] objectStrings = nodeString.split(";");
 
@@ -442,82 +808,68 @@ public class MikaStandardAI {
             this.score = score;
         }
 
-        public String getName() {
+        String getName() {
             return name;
         }
 
-        public void setName(String name) {
+        void setName(String name) {
             this.name = name;
         }
 
-        public int getBombCount() {
+        int getBombCount() {
             return bombCount;
         }
 
-        public void setBombCount(int bombCount) {
+        void setBombCount(int bombCount) {
             this.bombCount = bombCount;
         }
 
-        public int getMaxBomb() {
+        int getMaxBomb() {
             return maxBomb;
         }
 
-        public void setMaxBomb(int maxBomb) {
+        void setMaxBomb(int maxBomb) {
             this.maxBomb = maxBomb;
         }
 
-        public int getBombRange() {
+        int getBombRange() {
             return bombRange;
         }
 
-        public void setBombRange(int bombRange) {
+        void setBombRange(int bombRange) {
             this.bombRange = bombRange;
         }
 
-        public String getStatus() {
+        String getStatus() {
             return status;
         }
 
-        public void setStatus(String status) {
+        void setStatus(String status) {
             this.status = status;
         }
 
-        public int getScore() {
+        int getScore() {
             return score;
         }
 
-        public void setScore(int score) {
+        void setScore(int score) {
             this.score = score;
         }
 
-        public int getX() {
+        int getX() {
             return x;
         }
 
-        public void setX(int x) {
+        void setX(int x) {
             this.x = x;
         }
 
-        public int getY() {
+        int getY() {
             return y;
         }
 
-        public void setY(int y) {
+        void setY(int y) {
             this.y = y;
-        }
-
-        @Override
-        public String toString() {
-            return "Player{" +
-                    "name='" + name + '\'' +
-                    ", bombCount=" + bombCount +
-                    ", maxBomb=" + maxBomb +
-                    ", bombRange=" + bombRange +
-                    ", status='" + status + '\'' +
-                    ", score=" + score +
-                    ", x=" + x +
-                    ", y=" + y +
-                    '}';
         }
     }
 
@@ -588,11 +940,3 @@ public class MikaStandardAI {
         }
     }
 }
-
-//static class Helper {
-//    public boolean isValidAndSafe {
-        // make sure setiap gerakan gaada flare
-        // kalo gerak atas bawah kanan kiri, bukan temboque
-        // msh dalem arena
-//    }
-//}
