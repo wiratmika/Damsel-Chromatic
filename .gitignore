@@ -1,0 +1,8 @@
+.idea/
+GUI/
+Server/
+*map.txt
+readme.txt
+**/*.class
+RandomAI*.java
+TegarAI*.java
